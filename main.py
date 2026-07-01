@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from openai import OpenAI
 
-from data_loader import build_store, load_catalog
-from models import ChatRequest, ChatResponse
+from app.data_loader import build_store, load_catalog
+from app.models import ChatRequest, ChatResponse
 
 load_dotenv()
 
@@ -22,9 +22,9 @@ load_dotenv()
 def _make_agent(store, openai_client):
     engine = os.getenv("RAG_ENGINE", "raw").lower()
     if engine == "langchain":
-        from langchain_agent import LangchainAgentService
+        from app.agents.langchain_agent import LangchainAgentService
         return LangchainAgentService(store, openai_client)
-    from raw_agent import RawAgentService
+    from app.agents.raw_agent import RawAgentService
     return RawAgentService(store, openai_client)
 
 

@@ -18,7 +18,7 @@ import faiss
 import numpy as np
 from rapidfuzz import process as fuzz_process
 
-from models import KEY_TO_CODE, CatalogItem
+from app.models import KEY_TO_CODE, CatalogItem
 
 
 # ---------------------------------------------------------------------------
