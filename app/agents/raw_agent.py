@@ -102,7 +102,9 @@ class RawAgentService:
         if not classification.has_enough_context:
             return self._handle_clarify(classification)
 
-        # new_info | refine_add | refine_remove | refine_disambiguate
+        if turn in {"new_info", "refine_add", "refine_remove", "refine_disambiguate"}:
+            return self._handle_refine(classification)
+
         return self._handle_recommend(classification)
 
     # ------------------------------------------------------------------
@@ -260,6 +262,10 @@ class RawAgentService:
             recommendations=recommendations,
             end_of_conversation=False,
         )
+
+    def _handle_refine(self, c: TurnClassification) -> ChatResponse:
+        """Refine turns currently reuse the recommendation pipeline."""
+        return self._handle_recommend(c)
 
     # ------------------------------------------------------------------
     # Retrieval pipeline
