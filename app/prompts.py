@@ -55,9 +55,15 @@ current_shortlist: Re-derive from the most recent assistant turn that contained 
                    Empty list if no recommendations have been made yet.
 has_enough_context: true if BOTH of these are satisfied:
                    (a) role_context is non-empty
-                   (b) you have enough detail to meaningfully search the catalog
-                   false if the role is still unknown OR the query is so vague
-                   that any recommendation would be a guess.
+           (b) you have at least one concrete search signal beyond a bare
+             role name, such as seniority, purpose, locale, or an
+             explicit skill/constraint that would change retrieval.
+           false if the role is still unknown OR the query is so vague
+           that any recommendation would be a guess.
+
+When has_enough_context is false, prioritize the missing dimension in this
+order: role -> seniority -> purpose -> locale -> explicit skills/constraints.
+Ask about only one missing dimension per clarification turn.
 
 ─── HARD RULES ───────────────────────────────────────────────────────────────
 • Output ONLY the JSON object. No explanation, no markdown, no preamble.
