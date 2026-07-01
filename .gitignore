@@ -1,0 +1,71 @@
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+wheels/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+parts/
+var/
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.virtualenv/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+nosetests.xml
+test-results/
+*.log
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# FAISS index (rebuilt on startup — no need to commit)
+*.index
+*.faiss
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+desktop.ini
+ehthumbs.db
+
+SHL_AI_Intern_Assignment.pdf
+project-context-md-plan-this-implementa-fluffy-peach.md
+PROJECT_CONTEXT.md
+CLAUDE.md
+GenAI_SampleConversations
+count_json_entries.py
