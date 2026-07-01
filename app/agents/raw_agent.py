@@ -379,13 +379,13 @@ class RawAgentService:
         role = c.role_context.lower()
         if any(kw in role for kw in ("safety", "industrial", "plant", "operator")):
             targets = [
-                "Dependability and Safety Instrument",
-                "Manufacturing & Industrial - Safety & Dependability 8.0",
+                "Dependability and Safety Instrument (DSI)",
+                "Manufac. & Indust. - Safety & Dependability 8.0",
             ]
         elif "sales" in role:
             targets = ["OPQ MQ Sales Report", _OPQ32R_NAME]
         elif any(kw in role for kw in ("contact cent", "customer serv", "call cent")):
-            targets = ["Entry Level Customer Serv - Retail & Contact Center"]
+            targets = ["Entry Level Customer Serv-Retail & Contact Center"]
         else:
             targets = [_OPQ32R_NAME]
 
