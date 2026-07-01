@@ -17,10 +17,15 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import faiss
+import numpy as np
+
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.models import ChatResponse, Recommendation
+from app.agents.raw_agent import RawAgentService
+from app.data_loader import CatalogStore, semantic_search_with_scores
+from app.models import CatalogItem, ChatResponse, Recommendation, TurnClassification
 
 
 CATALOG_PATH = Path(__file__).parent.parent / "shl_product_catalog.json"
@@ -116,3 +121,96 @@ def test_model_dump_round_trip():
     restored = ChatResponse.model_validate(dumped)
     assert restored.reply == resp.reply
     assert restored.recommendations[0].name == "Graduate Scenarios"
+
+
+# ---------------------------------------------------------------------------
+# Low-similarity retrieval guards
+# ---------------------------------------------------------------------------
+
+def _build_score_test_store() -> CatalogStore:
+    items = [
+        CatalogItem(
+            entity_id="1",
+            name="Alpha",
+            url="https://example.com/a",
+            description="Alpha item",
+            job_levels=[],
+            duration_minutes=None,
+            duration_display="",
+            languages=[],
+            remote=False,
+            adaptive=False,
+            test_type="P",
+            keys_raw=[],
+        ),
+        CatalogItem(
+            entity_id="2",
+            name="Beta",
+            url="https://example.com/b",
+            description="Beta item",
+            job_levels=[],
+            duration_minutes=None,
+            duration_display="",
+            languages=[],
+            remote=False,
+            adaptive=False,
+            test_type="K",
+            keys_raw=[],
+        ),
+    ]
+    embeddings = np.array(
+        [
+            [1.0] + [0.0] * 15,
+            [0.0, 1.0] + [0.0] * 14,
+        ],
+        dtype=np.float32,
+    )
+    index = faiss.IndexFlatIP(16)
+    index.add(embeddings)
+    return CatalogStore(
+        items=items,
+        by_entity_id={item.entity_id: item for item in items},
+        name_to_id={item.name.lower(): item.entity_id for item in items},
+        embeddings=embeddings,
+        faiss_index=index,
+        index_to_id=[item.entity_id for item in items],
+        valid_urls=frozenset(item.url for item in items),
+    )
+
+
+def test_semantic_search_returns_scores():
+    store = _build_score_test_store()
+    query = np.array([1.0] + [0.0] * 15, dtype=np.float32)
+    results = semantic_search_with_scores(store, query, k=2)
+    assert results[0][0].name == "Alpha"
+    assert results[0][1] == pytest.approx(1.0)
+
+
+def test_low_similarity_branch_flags_catalog_gap(monkeypatch):
+    store = _build_score_test_store()
+    service = RawAgentService(store, openai_client=object())
+
+    def fake_search(_store, _query_embedding, k=20):
+        return [(store.items[0], 0.25), (store.items[1], 0.24)]
+
+    monkeypatch.setattr("app.agents.raw_agent.semantic_search_with_scores", fake_search)
+    monkeypatch.setattr(service, "_embed", lambda _text: np.zeros(16, dtype=np.float32))
+
+    classification = TurnClassification(
+        turn_type="new_info",
+        role_context="Rust developer",
+        seniority="",
+        skills=["Rust"],
+        locale="",
+        purpose="selection",
+        named_removals=[],
+        compare_targets=[],
+        explicit_adds=[],
+        current_shortlist=[],
+        has_enough_context=True,
+    )
+
+    candidates, defaults_added, catalog_gaps = service._retrieve(classification)
+    assert candidates[0].name == "Alpha"
+    assert defaults_added == []
+    assert any("no strong match" in gap for gap in catalog_gaps)

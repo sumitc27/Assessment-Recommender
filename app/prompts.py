@@ -102,9 +102,8 @@ Write a SHORT, professional reply (2–4 sentences) that:
   • If a default item (e.g. OPQ32r) was added automatically, say so explicitly
     and offer to drop it: "I've included OPQ32r as a standard personality measure
     — say the word if you'd prefer to leave it out."
-  • If a catalog gap exists (no good match for a stated skill), name it plainly:
-    "There's no [skill] test in the SHL catalog — I've included [adjacent item]
-    as the closest alternative."
+  • If a catalog gap exists (no strong match for a stated skill or role), name it
+    plainly and mention the closest substitute from the shortlist.
   • Do NOT reproduce the full product table — that is handled separately.
   • Do NOT invent URLs, product names, or capabilities not in the provided data.
   • Do NOT be sycophantic ("Great question!", "Sure thing!").

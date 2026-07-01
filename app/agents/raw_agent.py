@@ -17,7 +17,7 @@ from typing import Optional
 
 import numpy as np
 
-from app.data_loader import CatalogStore, fuzzy_lookup, semantic_search
+from app.data_loader import CatalogStore, fuzzy_lookup, semantic_search, semantic_search_with_scores
 from app.models import (
     CatalogItem,
     ChatResponse,
@@ -78,6 +78,7 @@ _CLASSIFIER_JSON_SCHEMA = {
 }
 
 _OPQ32R_NAME = "Occupational Personality Questionnaire OPQ32r"
+_LOW_SIMILARITY_THRESHOLD = 0.28
 
 
 class RawAgentService:
@@ -276,11 +277,21 @@ class RawAgentService:
     ) -> tuple[list[CatalogItem], list[str], list[str]]:
         """Returns (candidates, defaults_added, catalog_gaps)."""
         query_vec = self._embed(self._build_persona_query(c))
-        candidates = semantic_search(self._store, query_vec, k=20)
+        scored_candidates = semantic_search_with_scores(self._store, query_vec, k=20)
+        candidates = [item for item, _score in scored_candidates]
         candidates = self._rerank(candidates, c)
         candidates = self._apply_removals(candidates, c.named_removals)
 
         catalog_gaps: list[str] = []
+        top_score = scored_candidates[0][1] if scored_candidates else None
+        if top_score is not None and top_score < _LOW_SIMILARITY_THRESHOLD:
+            substitute = candidates[0].name if candidates else None
+            signal = c.skills[0] if c.skills else (c.role_context or "this request")
+            gap_note = f'no strong match for "{signal}" in the catalog'
+            if substitute:
+                gap_note += f"; using {substitute} as the closest substitute"
+            catalog_gaps.append(gap_note)
+
         for add_name in c.explicit_adds:
             match = fuzzy_lookup(self._store, add_name)
             if match and match not in candidates:

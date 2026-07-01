@@ -214,14 +214,23 @@ def semantic_search(
 
     query_embedding must already be L2-normalised (same space as store.embeddings).
     """
+    return [item for item, _score in semantic_search_with_scores(store, query_embedding, k)]
+
+
+def semantic_search_with_scores(
+    store: CatalogStore,
+    query_embedding: np.ndarray,
+    k: int = 20,
+) -> list[tuple[CatalogItem, float]]:
+    """Return the top-k catalog items together with their cosine similarity."""
     vec = query_embedding.reshape(1, -1).astype(np.float32)
-    _scores, indices = store.faiss_index.search(vec, k)
-    results: list[CatalogItem] = []
-    for idx in indices[0]:
+    scores, indices = store.faiss_index.search(vec, k)
+    results: list[tuple[CatalogItem, float]] = []
+    for score, idx in zip(scores[0], indices[0]):
         if idx == -1:
             continue
         entity_id = store.index_to_id[idx]
-        results.append(store.by_entity_id[entity_id])
+        results.append((store.by_entity_id[entity_id], float(score)))
     return results
 
 

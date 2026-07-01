@@ -181,10 +181,10 @@ class LangchainAgentService:
         persona_query = self._raw._build_persona_query(c)
 
         # Retrieve via LangChain FAISS
-        docs = self._vectorstore.similarity_search(persona_query, k=20)
+        docs_and_scores = self._vectorstore.similarity_search_with_relevance_scores(persona_query, k=20)
         candidates = [
             self._store.by_entity_id[doc.metadata["entity_id"]]
-            for doc in docs
+            for doc, _score in docs_and_scores
             if doc.metadata.get("entity_id") in self._store.by_entity_id
         ]
 
@@ -193,6 +193,15 @@ class LangchainAgentService:
         candidates = self._raw._apply_removals(candidates, c.named_removals)
 
         catalog_gaps: list[str] = []
+        top_score = docs_and_scores[0][1] if docs_and_scores else None
+        if top_score is not None and top_score < 0.28:
+            substitute = candidates[0].name if candidates else None
+            signal = c.skills[0] if c.skills else (c.role_context or "this request")
+            gap_note = f'no strong match for "{signal}" in the catalog'
+            if substitute:
+                gap_note += f"; using {substitute} as the closest substitute"
+            catalog_gaps.append(gap_note)
+
         for add_name in c.explicit_adds:
             match = fuzzy_lookup(self._store, add_name)
             if match and match not in candidates:
