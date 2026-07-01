@@ -118,7 +118,11 @@ class LangchainAgentService:
     ) -> ChatResponse:
         targets = c.compare_targets
         if len(targets) < 2:
-            return self._handle_recommend(c)
+            return ChatResponse(
+                reply="I can compare two named assessments once you tell me both product names.",
+                recommendations=self._raw._rebuild_shortlist(c.current_shortlist),
+                end_of_conversation=False,
+            )
 
         item_a = fuzzy_lookup(self._store, targets[0])
         item_b = fuzzy_lookup(self._store, targets[1])

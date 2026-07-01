@@ -152,11 +152,35 @@ def test_legal_question_refused_gracefully(client):
     assert t2["end_of_conversation"] is False, (
         "end_of_conversation must stay False after a mid-conversation refusal"
     )
+    assert t2["recommendations"], "Prior shortlist should survive refusal turns"
     # Agent should decline the legal question in the reply
     reply_lower = t2["reply"].lower()
     assert any(kw in reply_lower for kw in ("legal", "compliance", "advise", "outside")), (
         f"Expected refusal language in reply, got: {t2['reply']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Probe 3b: Compare preserves the current shortlist
+# ---------------------------------------------------------------------------
+
+def test_compare_request_preserves_shortlist(client):
+    """Comparison turns should keep the standing shortlist intact."""
+    t1 = chat(client, [
+        {"role": "user", "content": "Hiring a mid-level Java developer."}
+    ])
+    assert_schema(t1)
+
+    history = [
+        {"role": "user", "content": "Hiring a mid-level Java developer."},
+        {"role": "assistant", "content": t1["reply"]},
+        {"role": "user", "content": "What is the difference between the Java test and the coding interview?"},
+    ]
+    t2 = chat(client, history)
+    assert_schema(t2)
+
+    assert t2["end_of_conversation"] is False
+    assert t2["recommendations"], "Compare turns should preserve the current shortlist"
 
 
 # ---------------------------------------------------------------------------
