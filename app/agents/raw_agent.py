@@ -41,6 +41,10 @@ from app.prompts import (
 logger = logging.getLogger(__name__)
 
 # JSON schema passed to gpt-4o-mini as response_format — enforces structure
+# JSON schema passed to gpt-4o-mini as response_format.
+# IMPORTANT: `reasoning` is intentionally the FIRST property.  OpenAI generates
+# JSON object fields in schema order, so placing it first forces the model to
+# write its chain-of-thought ledger before it commits to any extracted value.
 _CLASSIFIER_JSON_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -49,6 +53,9 @@ _CLASSIFIER_JSON_SCHEMA = {
         "schema": {
             "type": "object",
             "properties": {
+                # ── CoT scratchpad — written first, never forwarded to users ──
+                "reasoning": {"type": "string"},
+                # ── Classification output ─────────────────────────────────────
                 "turn_type": {
                     "type": "string",
                     "enum": [
@@ -69,6 +76,9 @@ _CLASSIFIER_JSON_SCHEMA = {
                 "has_enough_context": {"type": "boolean"},
             },
             "required": [
+                # reasoning must come first in the required list to match
+                # property order — some OpenAI runtime versions respect this.
+                "reasoning",
                 "turn_type", "role_context", "seniority", "skills", "locale",
                 "purpose", "named_removals", "compare_targets", "explicit_adds",
                 "current_shortlist", "has_enough_context",

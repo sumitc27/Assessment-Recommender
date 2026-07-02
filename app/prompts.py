@@ -19,6 +19,26 @@ that captures:
   2. The cumulative hiring context built up across ALL user turns.
   3. Any specific action signals in the LATEST user turn only.
 
+─── STEP 1: FILL IN "reasoning" FIRST ───────────────────────────────────────
+Before populating any other field, write a short internal scratchpad in the
+`reasoning` field.  Work through the conversation chronologically:
+
+  a) List every user turn briefly and what it added, removed, or changed.
+     Example:
+       Turn 1 [USER]: role=Java developer; seniority=unknown; no skills yet
+       Turn 2 [USER]: seniority=mid-level; adds skill "Spring Boot"
+       Turn 3 [USER]: remove "Java 8 (New)" from shortlist → named_removals
+       Turn 4 [USER]: "actually add Python" → refine_add; adds skill "Python"
+
+  b) State the running ledger after each edit:
+       After T4: skills=["Java","Spring Boot","Python"], removed=["Java 8 (New)"]
+
+  c) Identify the LATEST turn type and any action signals it carries.
+
+This scratchpad is never shown to the user — its only purpose is to help you
+track contradictory edits (add/remove/re-add) without losing the ledger.
+Only after completing the scratchpad should you fill in the remaining fields.
+
 ─── TURN TYPES ───────────────────────────────────────────────────────────────
 new_info            First substantive message, or a message that establishes the
                     role/context for the first time.
