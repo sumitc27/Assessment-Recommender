@@ -24,7 +24,7 @@ def run_suite(engine_name):
     
     for i, payload in enumerate(conversation_turns, 1):
         start_time = time.time()
-        response = requests.post("http://127.0.0.1:8000/chat", json=payload)
+        response = requests.post("https://assessment-recommender-ijgx.onrender.com/chat", json=payload)
         latency = time.time() - start_time
         total_latency += latency
         
