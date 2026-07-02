@@ -182,42 +182,47 @@ class LangchainAgentService:
     # ------------------------------------------------------------------
 
     def _handle_recommend(self, c: TurnClassification) -> ChatResponse:
-        persona_query = self._raw._build_persona_query(c)
+        is_refine = c.turn_type in {"refine_add", "refine_remove", "refine_disambiguate"}
 
-        # Retrieve via LangChain FAISS
-        docs_and_scores = self._vectorstore.similarity_search_with_relevance_scores(persona_query, k=20)
-        candidates = [
-            self._store.by_entity_id[doc.metadata["entity_id"]]
-            for doc, _score in docs_and_scores
-            if doc.metadata.get("entity_id") in self._store.by_entity_id
-        ]
+        if is_refine and c.current_shortlist:
+            # Delegate to raw agent's _retrieve — it handles shortlist preservation
+            candidates, defaults_added, catalog_gaps = self._raw._retrieve(c)
+        else:
+            # Fresh retrieval via LangChain FAISS
+            persona_query = self._raw._build_persona_query(c)
+            docs_and_scores = self._vectorstore.similarity_search_with_relevance_scores(
+                persona_query, k=20
+            )
+            candidates = [
+                self._store.by_entity_id[doc.metadata["entity_id"]]
+                for doc, _score in docs_and_scores
+                if doc.metadata.get("entity_id") in self._store.by_entity_id
+            ]
+            candidates = self._raw._rerank(candidates, c)
+            candidates = self._raw._apply_removals(candidates, c.named_removals)
 
-        # Shared post-retrieval logic (rerank, remove, bundle)
-        candidates = self._raw._rerank(candidates, c)
-        candidates = self._raw._apply_removals(candidates, c.named_removals)
+            catalog_gaps: list[str] = []
+            top_score = docs_and_scores[0][1] if docs_and_scores else None
+            if top_score is not None and top_score < 0.28:
+                substitute = candidates[0].name if candidates else None
+                signal = c.skills[0] if c.skills else (c.role_context or "this request")
+                gap_note = f'no strong match for "{signal}" in the catalog'
+                if substitute:
+                    gap_note += f"; using {substitute} as the closest substitute"
+                catalog_gaps.append(gap_note)
 
-        catalog_gaps: list[str] = []
-        top_score = docs_and_scores[0][1] if docs_and_scores else None
-        if top_score is not None and top_score < 0.28:
-            substitute = candidates[0].name if candidates else None
-            signal = c.skills[0] if c.skills else (c.role_context or "this request")
-            gap_note = f'no strong match for "{signal}" in the catalog'
-            if substitute:
-                gap_note += f"; using {substitute} as the closest substitute"
-            catalog_gaps.append(gap_note)
+            for add_name in c.explicit_adds:
+                match = fuzzy_lookup(self._store, add_name)
+                if match and match not in candidates:
+                    candidates.insert(0, match)
+                elif match is None:
+                    catalog_gaps.append(add_name)
 
-        for add_name in c.explicit_adds:
-            match = fuzzy_lookup(self._store, add_name)
-            if match and match not in candidates:
-                candidates.insert(0, match)
-            elif match is None:
-                catalog_gaps.append(add_name)
+            candidates, defaults_added = self._raw._apply_default_bundling(candidates, c)
+            if not catalog_gaps:
+                catalog_gaps = self._raw._detect_skill_gaps(c.skills, candidates)
 
-        candidates, defaults_added = self._raw._apply_default_bundling(candidates, c)
-        if not catalog_gaps:
-            catalog_gaps = self._raw._detect_skill_gaps(c.skills, candidates)
-
-        candidates = candidates[:10]
+            candidates = candidates[:10]
 
         shortlist_text = "\n".join(
             f"  {i+1}. {item.name} [{item.test_type}] — {item.description[:100]}..."
@@ -234,6 +239,7 @@ class LangchainAgentService:
             "skills": ", ".join(c.skills) if c.skills else "none specified",
             "purpose": c.purpose or "unspecified",
             "locale": c.locale or "not specified",
+            "turn_type": c.turn_type,
             "count": len(candidates),
             "shortlist_text": shortlist_text,
             "defaults_added": ", ".join(defaults_added) if defaults_added else "none",

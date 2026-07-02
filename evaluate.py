@@ -1,6 +1,6 @@
 """
 Evaluation harness — replays all 10 labeled traces against the live server
-and reports schema compliance, Recall@10, and behavioral probe results.
+and reports schema compliance, Recall@10, and final-turn end_of_conversation.
 
 Run:
     python evaluate.py                  # assumes server on localhost:8000
@@ -234,7 +234,7 @@ def main():
     eoc_correct = sum(1 for r in all_results if r["end_of_conv_correct"])
     print(f"EOC correct      : {eoc_correct}/{len(all_results)}")
 
-    if total_failures > 0 or mean_recall < 0.5:
+    if total_failures > 0 or mean_recall < 0.6:
         sys.exit(1)
 
 

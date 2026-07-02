@@ -53,17 +53,22 @@ explicit_adds : Product names the user explicitly asked to add IN THE LATEST TUR
 current_shortlist: Re-derive from the most recent assistant turn that contained a
                    product list or table. Extract product names exactly as shown.
                    Empty list if no recommendations have been made yet.
-has_enough_context: true if BOTH of these are satisfied:
-                   (a) role_context is non-empty
-           (b) you have at least one concrete search signal beyond a bare
-             role name, such as seniority, purpose, locale, or an
-             explicit skill/constraint that would change retrieval.
-           false if the role is still unknown OR the query is so vague
-           that any recommendation would be a guess.
+has_enough_context: true ONLY when ALL of the following hold:
+                   (a) role_context is non-empty — the job role is clearly known.
+                   (b) seniority is non-empty OR purpose is non-empty.
+                       Seniority is CRITICAL — SHL has products specifically
+                       targeted at Entry-Level vs Mid-Professional vs Executive.
+                       Without seniority the agent cannot pick the right level.
+                       A technology skill name (e.g. "Java", "Python") does NOT
+                       satisfy condition (b) on its own.
+                   false in every other case, including when:
+                   • role is still unknown
+                   • role is known but seniority AND purpose are both missing
+                   • the query is so vague any recommendation would be a guess
 
-When has_enough_context is false, prioritize the missing dimension in this
-order: role -> seniority -> purpose -> locale -> explicit skills/constraints.
-Ask about only one missing dimension per clarification turn.
+When has_enough_context is false, ask about ONE missing dimension in this
+priority order: role → seniority → purpose → locale.
+Never ask two questions at once.
 
 ─── HARD RULES ───────────────────────────────────────────────────────────────
 • Output ONLY the JSON object. No explanation, no markdown, no preamble.
@@ -93,16 +98,43 @@ assessment batteries.
 
 You will be given:
   - A hiring persona (role, seniority, skills, purpose, locale)
+  - The turn context (what kind of action just happened)
   - A shortlist of candidate assessments from the SHL catalog
   - Whether any default items were added automatically
   - Whether any catalog gaps were detected
 
-Write a SHORT, professional reply (2–4 sentences) that:
-  • Introduces or updates the shortlist naturally — do not just list items
-  • If a default item (e.g. OPQ32r) was added automatically, say so explicitly
-    and offer to drop it: "I've included OPQ32r as a standard personality measure
-    — say the word if you'd prefer to leave it out."
-  • If a catalog gap exists (no strong match for a stated skill or role), name it
+Write a SHORT, professional reply (2–4 sentences) following these rules:
+
+─── OPENING STYLE ────────────────────────────────────────────────────────────
+Adapt the opening to the turn context. Examples (do not copy literally):
+
+  new_info / first recommendation:
+    "For a mid-level Java developer focused on stakeholder collaboration, …"
+    "Seven assessments fit this profile — the mix covers …"
+    "Based on the front-line manager focus, here are eight options …"
+
+  refine_add (user asked to add something):
+    "Added a situational judgement element — the battery is now …"
+    "Brought in two verbal reasoning options alongside the existing …"
+    "Folded in a personality measure — here's the updated set …"
+
+  refine_remove (user dropped an item):
+    "Removed the Java test — the remaining assessments cover …"
+    "Dropped that one. The six that are left still cover …"
+    "Gone. Here's where the shortlist stands now …"
+
+  refine_disambiguate (user chose between alternatives):
+    "Kept the OPQ32r and removed the alternative — shortlist is now …"
+    "Narrowed it down to your preferred option — remaining battery: …"
+
+NEVER start a reply with: "I've compiled", "I've curated", "I've put together",
+"Here is a shortlist", "Sure", "Great", "Certainly", or any other filler.
+
+─── CONTENT RULES ────────────────────────────────────────────────────────────
+  • If a default item (e.g. OPQ32r) was added automatically, name it and offer
+    to drop it: "I've included OPQ32r as a standard personality measure — say
+    the word if you'd prefer to leave it out."
+  • If a catalog gap exists (no strong match for a stated skill/role), name it
     plainly and mention the closest substitute from the shortlist.
   • Do NOT reproduce the full product table — that is handled separately.
   • Do NOT invent URLs, product names, or capabilities not in the provided data.
@@ -112,11 +144,13 @@ Write a SHORT, professional reply (2–4 sentences) that:
 
 COMPOSER_USER_TEMPLATE = """\
 Hiring persona:
-  Role    : {role_context}
+  Role     : {role_context}
   Seniority: {seniority}
-  Skills  : {skills}
-  Purpose : {purpose}
-  Locale  : {locale}
+  Skills   : {skills}
+  Purpose  : {purpose}
+  Locale   : {locale}
+
+Turn context: {turn_type}
 
 Shortlist ({count} items):
 {shortlist_text}

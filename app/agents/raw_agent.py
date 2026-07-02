@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 import numpy as np
@@ -138,7 +139,7 @@ class RawAgentService:
         reply = REFUSAL_TEMPLATE.format(topic="legal or compliance")
         shortlist = self._rebuild_shortlist(c.current_shortlist)
         return ChatResponse(
-            reply=reply,
+            reply=self._attach_shortlist_footer(reply, shortlist),
             recommendations=shortlist,
             end_of_conversation=False,
         )
@@ -151,7 +152,7 @@ class RawAgentService:
             else "Got it. Let me know if you need anything else."
         )
         return ChatResponse(
-            reply=reply,
+            reply=self._attach_shortlist_footer(reply, shortlist),
             recommendations=shortlist,
             end_of_conversation=True,
         )
@@ -185,9 +186,13 @@ class RawAgentService:
     ) -> ChatResponse:
         targets = c.compare_targets
         if len(targets) < 2:
+            shortlist = self._rebuild_shortlist(c.current_shortlist)
             return ChatResponse(
-                reply="I can compare two named assessments once you tell me both product names.",
-                recommendations=self._rebuild_shortlist(c.current_shortlist),
+                reply=self._attach_shortlist_footer(
+                    "I can compare two named assessments once you tell me both product names.",
+                    shortlist,
+                ),
+                recommendations=shortlist,
                 end_of_conversation=False,
             )
 
@@ -196,12 +201,16 @@ class RawAgentService:
 
         if item_a is None or item_b is None:
             missing = targets[0] if item_a is None else targets[1]
+            shortlist = self._rebuild_shortlist(c.current_shortlist)
             return ChatResponse(
-                reply=(
+                reply=self._attach_shortlist_footer(
+                    (
                     f'I couldn\'t find "{missing}" in the SHL catalog. '
                     "Could you check the name and try again?"
+                    ),
+                    shortlist,
                 ),
-                recommendations=self._rebuild_shortlist(c.current_shortlist),
+                recommendations=shortlist,
                 end_of_conversation=False,
             )
 
@@ -222,9 +231,10 @@ class RawAgentService:
             ],
         )
         reply = response.choices[0].message.content.strip()
+        shortlist = self._rebuild_shortlist(c.current_shortlist)
         return ChatResponse(
-            reply=reply,
-            recommendations=self._rebuild_shortlist(c.current_shortlist),
+            reply=self._attach_shortlist_footer(reply, shortlist),
+            recommendations=shortlist,
             end_of_conversation=False,
         )
 
@@ -241,6 +251,7 @@ class RawAgentService:
             skills=", ".join(c.skills) if c.skills else "none specified",
             purpose=c.purpose or "unspecified",
             locale=c.locale or "not specified",
+            turn_type=c.turn_type,
             count=len(candidates),
             shortlist_text=shortlist_text,
             defaults_added=", ".join(defaults_added) if defaults_added else "none",
@@ -261,6 +272,7 @@ class RawAgentService:
             for item in candidates
         ]
         self._assert_no_hallucinated_urls(recommendations)
+        reply = self._attach_shortlist_footer(reply, recommendations)
 
         return ChatResponse(
             reply=reply,
@@ -269,7 +281,6 @@ class RawAgentService:
         )
 
     def _handle_refine(self, c: TurnClassification) -> ChatResponse:
-        """Refine turns currently reuse the recommendation pipeline."""
         return self._handle_recommend(c)
 
     # ------------------------------------------------------------------
@@ -279,23 +290,53 @@ class RawAgentService:
     def _retrieve(
         self, c: TurnClassification
     ) -> tuple[list[CatalogItem], list[str], list[str]]:
-        """Returns (candidates, defaults_added, catalog_gaps)."""
-        query_vec = self._embed(self._build_persona_query(c))
-        scored_candidates = semantic_search_with_scores(self._store, query_vec, k=20)
-        candidates = [item for item, _score in scored_candidates]
-        candidates = self._rerank(candidates, c)
-        candidates = self._apply_removals(candidates, c.named_removals)
+        """Returns (candidates, defaults_added, catalog_gaps).
 
+        For refine turns with an established shortlist the existing items are
+        preserved as the starting point so the user never loses their list.
+        For new_info (or when there is no prior shortlist) a fresh FAISS search
+        is performed.
+        """
         catalog_gaps: list[str] = []
-        top_score = scored_candidates[0][1] if scored_candidates else None
-        if top_score is not None and top_score < _LOW_SIMILARITY_THRESHOLD:
-            substitute = candidates[0].name if candidates else None
-            signal = c.skills[0] if c.skills else (c.role_context or "this request")
-            gap_note = f'no strong match for "{signal}" in the catalog'
-            if substitute:
-                gap_note += f"; using {substitute} as the closest substitute"
-            catalog_gaps.append(gap_note)
+        is_refine = c.turn_type in {"refine_add", "refine_remove", "refine_disambiguate"}
 
+        if is_refine and c.current_shortlist:
+            # Rebuild the standing shortlist from history
+            candidates: list[CatalogItem] = []
+            for name in c.current_shortlist:
+                item = fuzzy_lookup(self._store, name, threshold=70)
+                if item:
+                    candidates.append(item)
+
+            # Apply the latest removals against the preserved list
+            candidates = self._apply_removals(candidates, c.named_removals)
+
+            # For refine_add: supplement with fresh FAISS results to fill gaps
+            if c.turn_type == "refine_add" and len(candidates) < 10:
+                query_vec = self._embed(self._build_persona_query(c))
+                scored = semantic_search_with_scores(self._store, query_vec, k=20)
+                for item, _score in scored:
+                    if item not in candidates and len(candidates) < 10:
+                        candidates.append(item)
+
+        else:
+            # Fresh retrieval for new_info or when no prior shortlist exists
+            query_vec = self._embed(self._build_persona_query(c))
+            scored_candidates = semantic_search_with_scores(self._store, query_vec, k=20)
+            candidates = [item for item, _score in scored_candidates]
+            candidates = self._rerank(candidates, c)
+            candidates = self._apply_removals(candidates, c.named_removals)
+
+            top_score = scored_candidates[0][1] if scored_candidates else None
+            if top_score is not None and top_score < _LOW_SIMILARITY_THRESHOLD:
+                substitute = candidates[0].name if candidates else None
+                signal = c.skills[0] if c.skills else (c.role_context or "this request")
+                gap_note = f'no strong match for "{signal}" in the catalog'
+                if substitute:
+                    gap_note += f"; using {substitute} as the closest substitute"
+                catalog_gaps.append(gap_note)
+
+        # Explicit adds and gap detection apply regardless of turn type
         for add_name in c.explicit_adds:
             match = fuzzy_lookup(self._store, add_name)
             if match and match not in candidates:
@@ -338,7 +379,7 @@ class RawAgentService:
     ) -> list[CatalogItem]:
         """Boost items matching seniority and locale to the front."""
         if not c.seniority and not c.locale:
-            return candidates
+            return self._rank_by_relevance(candidates, c)
 
         boosted, rest = [], []
         for item in candidates:
@@ -353,7 +394,41 @@ class RawAgentService:
             )
             (boosted if level_ok and locale_ok else rest).append(item)
 
-        return boosted + rest
+        return self._rank_by_relevance(boosted + rest, c)
+
+    def _rank_by_relevance(
+        self, candidates: list[CatalogItem], c: TurnClassification
+    ) -> list[CatalogItem]:
+        role_terms = [
+            term for term in re.findall(r"[A-Za-z0-9+#.-]+", c.role_context.lower())
+            if len(term) > 2
+        ]
+        skill_terms = [
+            term for term in (skill.lower() for skill in c.skills)
+            if len(term) > 2
+        ]
+        ordered = []
+        for item in candidates:
+            text = " ".join([
+                item.name,
+                item.description,
+                " ".join(item.job_levels),
+                " ".join(item.languages),
+            ]).lower()
+            score = 0
+            if c.seniority and any(c.seniority.lower() in lvl.lower() for lvl in item.job_levels):
+                score += 3
+            if c.locale and (not item.languages or any(c.locale.lower() in lang.lower() for lang in item.languages)):
+                score += 2
+            for term in role_terms:
+                if term in text:
+                    score += 1
+            for term in skill_terms:
+                if term in text:
+                    score += 1
+            ordered.append((score, item))
+        ordered.sort(key=lambda pair: pair[0], reverse=True)
+        return [item for _score, item in ordered]
 
     def _apply_removals(
         self, candidates: list[CatalogItem], removals: list[str]
@@ -453,3 +528,11 @@ class RawAgentService:
         for rec in recs:
             if rec.url not in self._store.valid_urls:
                 raise ValueError(f"URL not in catalog: {rec.url}")
+
+    def _attach_shortlist_footer(
+        self, reply: str, recommendations: list[Recommendation]
+    ) -> str:
+        if not recommendations:
+            return reply
+        names = "; ".join(rec.name for rec in recommendations)
+        return f"{reply}\n\nCurrent shortlist: {names}."

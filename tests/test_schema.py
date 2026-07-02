@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.agents.raw_agent import RawAgentService
 from app.data_loader import CatalogStore, semantic_search_with_scores
-from app.models import CatalogItem, ChatResponse, Recommendation, TurnClassification
+from app.models import CatalogItem, ChatResponse, Message, Recommendation, TurnClassification
 
 
 CATALOG_PATH = Path(__file__).parent.parent / "shl_product_catalog.json"
@@ -214,3 +214,85 @@ def test_low_similarity_branch_flags_catalog_gap(monkeypatch):
     assert candidates[0].name == "Alpha"
     assert defaults_added == []
     assert any("no strong match" in gap for gap in catalog_gaps)
+
+
+def test_handle_confirm_rebuilds_shortlist():
+    store = _build_score_test_store()
+    service = RawAgentService(store, openai_client=object())
+    classification = TurnClassification(
+        turn_type="closing_confirm",
+        role_context="",
+        seniority="",
+        skills=[],
+        locale="",
+        purpose="",
+        named_removals=[],
+        compare_targets=[],
+        explicit_adds=[],
+        current_shortlist=["Alpha", "Beta"],
+        has_enough_context=True,
+    )
+
+    response = service._handle_confirm(classification)
+
+    assert response.end_of_conversation is True
+    assert [rec.name for rec in response.recommendations] == ["Alpha", "Beta"]
+
+
+class _StubCompletion:
+    def create(self, **kwargs):
+        class _Message:
+            content = "Alpha and Beta measure different things."
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+
+        return _Response()
+
+
+class _StubChat:
+    completions = _StubCompletion()
+
+
+class _StubClient:
+    chat = _StubChat()
+
+
+def test_handle_compare_uses_catalog_items_and_preserves_shortlist():
+    store = _build_score_test_store()
+    service = RawAgentService(store, openai_client=_StubClient())
+    classification = TurnClassification(
+        turn_type="compare_request",
+        role_context="",
+        seniority="",
+        skills=[],
+        locale="",
+        purpose="",
+        named_removals=[],
+        compare_targets=["Alpha", "Beta"],
+        explicit_adds=[],
+        current_shortlist=["Alpha", "Beta"],
+        has_enough_context=True,
+    )
+
+    response = service._handle_compare(
+        classification,
+        messages=[Message(role="user", content="What is the difference between Alpha and Beta?")],
+    )
+
+    assert response.end_of_conversation is False
+    assert response.reply.startswith("Alpha and Beta measure different things.")
+    assert [rec.name for rec in response.recommendations] == ["Alpha", "Beta"]
+
+
+def test_attach_shortlist_footer():
+    store = _build_score_test_store()
+    service = RawAgentService(store, openai_client=object())
+    footer = service._attach_shortlist_footer(
+        "Here is the update.",
+        [Recommendation(name="Alpha", url="https://example.com/a", test_type="P")],
+    )
+    assert footer.endswith("Current shortlist: Alpha.")
