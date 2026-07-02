@@ -89,6 +89,14 @@ _CLASSIFIER_JSON_SCHEMA = {
 }
 
 _OPQ32R_NAME = "Occupational Personality Questionnaire OPQ32r"
+
+# Keyword-boost constants — calibrated so a single exact name-match can lift
+# an item ~0.20 above its cosine score, but can never dominate a genuinely
+# high-similarity result (cosine scores for strong matches sit around 0.65-0.80).
+_KW_BONUS_NAME = 0.20   # skill string appears verbatim in the item name
+_KW_BONUS_DESC = 0.08   # skill string appears verbatim in the item description
+_KW_INJECT_BASE = 0.38  # base score for keyword-only injections (above gap threshold)
+
 # Calibrated from calibrate_retrieval.py against 12 representative queries.
 # Scores below this indicate the top FAISS result is a weak stretch — the
 # composer will name the gap explicitly. Set at p25(top-1 scores) - 0.05 = 0.40.
@@ -163,7 +171,9 @@ class RawAgentService:
     # ------------------------------------------------------------------
 
     def _handle_refusal(self, c: TurnClassification) -> ChatResponse:
-        reply = REFUSAL_TEMPLATE.format(topic="legal or compliance")
+        # Change this line:
+        reply = REFUSAL_TEMPLATE
+        
         shortlist = self._rebuild_shortlist(c.current_shortlist)
         return ChatResponse(
             reply=self._attach_shortlist_footer(reply, shortlist),
@@ -195,7 +205,7 @@ class RawAgentService:
         )
         response = self._client.chat.completions.create(
             model="gpt-4o-mini",
-            temperature=0.3,
+            temperature=0.1,
             messages=[
                 {"role": "system", "content": CLARIFY_SYSTEM},
                 {"role": "user",   "content": user_prompt},
@@ -268,14 +278,22 @@ class RawAgentService:
     def _handle_recommend(
         self, c: TurnClassification, caveat: str = ""
     ) -> ChatResponse:
-        candidates, defaults_added, catalog_gaps = self._retrieve(c)
+        candidates, defaults_added, catalog_gaps, score_map = self._retrieve(c)
 
         # Surface the soft-budget caveat through the existing catalog_gaps channel
         if caveat:
             catalog_gaps = [caveat] + catalog_gaps
 
+        # Full description is sent — SHL descriptions are ~100-400 chars each
+        # so 10 items is well within the gpt-4o-mini context window. Truncating
+        # to 100 chars was silently dropping the most differentiating details
+        # (which ability domain, which job family, what the test measures).
         shortlist_text = "\n".join(
-            f"  {i+1}. {item.name} [{item.test_type}] — {item.description[:100]}..."
+            f"  {i+1}. {item.name} [{item.test_type}]\n"
+            f"      Keys: {', '.join(item.keys_raw) if item.keys_raw else 'N/A'}\n"
+            f"      Duration: {item.duration_display or 'N/A'} | "
+            f"Languages: {', '.join(item.languages[:3]) if item.languages else 'N/A'}\n"
+            f"      Description: {item.description}"
             for i, item in enumerate(candidates)
         )
         user_prompt = COMPOSER_USER_TEMPLATE.format(
@@ -308,6 +326,7 @@ class RawAgentService:
                 keys=item.keys_raw,
                 duration=item.duration_display,
                 languages=item.languages,
+                score=score_map.get(item.entity_id),
             )
             for item in candidates
         ]
@@ -329,8 +348,11 @@ class RawAgentService:
 
     def _retrieve(
         self, c: TurnClassification
-    ) -> tuple[list[CatalogItem], list[str], list[str]]:
-        """Returns (candidates, defaults_added, catalog_gaps).
+    ) -> tuple[list[CatalogItem], list[str], list[str], dict[str, float]]:
+        """Returns (candidates, defaults_added, catalog_gaps, score_map).
+
+        score_map: entity_id → combined cosine+keyword score (for testing/tuning).
+        Items added via shortlist rebuild or explicit_adds get score 0.0.
 
         For refine turns with an established shortlist the existing items are
         preserved as the starting point so the user never loses their list.
@@ -338,6 +360,7 @@ class RawAgentService:
         is performed.
         """
         catalog_gaps: list[str] = []
+        score_map: dict[str, float] = {}
         is_refine = c.turn_type in {"refine_add", "refine_remove", "refine_disambiguate"}
 
         if is_refine and c.current_shortlist:
@@ -351,29 +374,59 @@ class RawAgentService:
             # Apply the latest removals against the preserved list
             candidates = self._apply_removals(candidates, c.named_removals)
 
-            # For refine_add: supplement with fresh FAISS results to fill gaps
+            # For refine_add: supplement with fresh FAISS results to fill gaps.
+            # Fetch k=20 so there are enough candidates after quality filtering.
             if c.turn_type == "refine_add" and len(candidates) < 10:
                 query_vec = self._embed(self._build_persona_query(c))
                 scored = semantic_search_with_scores(self._store, query_vec, k=20)
-                for item, _score in scored:
-                    if item not in candidates and len(candidates) < 10:
+                scored = self._inject_keyword_matches(scored, c.skills)
+                scored = self._apply_keyword_boost(scored, c.skills)
+                for item, score in scored:
+                    if item not in candidates and score >= _LOW_SIMILARITY_THRESHOLD:
                         candidates.append(item)
+                        score_map[item.entity_id] = round(score, 4)
+                    if len(candidates) >= 10:
+                        break
 
         else:
-            # Fresh retrieval for new_info or when no prior shortlist exists
+            # Fresh retrieval for new_info or when no prior shortlist exists.
+            # k=20 gives a wide enough pool so quality filtering still leaves
+            # up to 10 good results rather than padding with weak ones.
             query_vec = self._embed(self._build_persona_query(c))
             scored_candidates = semantic_search_with_scores(self._store, query_vec, k=20)
+
+            # Record the raw top cosine score BEFORE boosting — this is the
+            # true signal for gap detection (keyword boost doesn't mean the
+            # catalog has a purpose-built test for the requested skill).
+            top_raw_score = scored_candidates[0][1] if scored_candidates else None
+
+            # Hybrid step 1: inject keyword matches the embedding search missed.
+            scored_candidates = self._inject_keyword_matches(scored_candidates, c.skills)
+
+            # Hybrid step 2: boost and re-sort by combined score.
+            scored_candidates = self._apply_keyword_boost(scored_candidates, c.skills)
+
+            # Dynamic quality filter: keep items at or above the threshold.
+            # Guarantee at least 3 results even for niche queries so the agent
+            # never returns an empty shortlist when the catalog has any match.
+            above = [(item, s) for item, s in scored_candidates if s >= _LOW_SIMILARITY_THRESHOLD]
+            if len(above) < 3:
+                above = scored_candidates[:3]   # top-3 fallback, no padding below that
+            scored_candidates = above
+
+            # Build score map before reranking changes order
+            for item, s in scored_candidates:
+                score_map[item.entity_id] = round(s, 4)
+
             candidates = [item for item, _score in scored_candidates]
             candidates = self._rerank(candidates, c)
             candidates = self._apply_removals(candidates, c.named_removals)
 
-            top_score = scored_candidates[0][1] if scored_candidates else None
-            if top_score is not None and top_score < _LOW_SIMILARITY_THRESHOLD:
-                substitute = candidates[0].name if candidates else None
+            if top_raw_score is not None and top_raw_score < _LOW_SIMILARITY_THRESHOLD:
                 signal = c.skills[0] if c.skills else (c.role_context or "this request")
                 gap_note = f'no strong match for "{signal}" in the catalog'
-                if substitute:
-                    gap_note += f"; using {substitute} as the closest substitute"
+                if candidates:
+                    gap_note += f"; using {candidates[0].name} as the closest substitute"
                 catalog_gaps.append(gap_note)
 
         # Explicit adds and gap detection apply regardless of turn type
@@ -389,7 +442,7 @@ class RawAgentService:
         if not catalog_gaps:
             catalog_gaps = self._detect_skill_gaps(c.skills, candidates)
 
-        return candidates[:10], defaults_added, catalog_gaps
+        return candidates[:10], defaults_added, catalog_gaps, score_map
 
     def _build_persona_query(self, c: TurnClassification) -> str:
         parts = []
@@ -538,6 +591,75 @@ class RawAgentService:
             (item.name + " " + item.description).lower() for item in candidates
         )
         return [s for s in skills if s.lower() not in candidate_text]
+
+    def _inject_keyword_matches(
+        self,
+        scored: list[tuple[CatalogItem, float]],
+        skills: list[str],
+    ) -> list[tuple[CatalogItem, float]]:
+        """
+        Scan the full catalog for items whose name or description contains any
+        explicit skill keyword and inject those not already present in `scored`.
+
+        Pure cosine search with k=20 can miss niche acronyms and version numbers
+        (e.g. ".NET Framework 4.5", "AWS Lambda") whose embeddings sit far from
+        the generic role query.  This catches them and inserts them at a neutral
+        baseline score so subsequent boosting can elevate them appropriately.
+
+        The catalog is only 377 items so an O(n) linear scan is negligible here.
+        """
+        if not skills:
+            return scored
+
+        skill_terms = [s.lower() for s in skills]
+        present_ids = {item.entity_id for item, _ in scored}
+
+        for item in self._store.items:
+            if item.entity_id in present_ids:
+                continue  # already returned by FAISS — don't duplicate
+            name_lower = item.name.lower()
+            desc_lower = item.description.lower()
+            if any(term in name_lower or term in desc_lower for term in skill_terms):
+                scored.append((item, _KW_INJECT_BASE))
+                present_ids.add(item.entity_id)
+
+        return scored
+
+    def _apply_keyword_boost(
+        self,
+        scored: list[tuple[CatalogItem, float]],
+        skills: list[str],
+    ) -> list[tuple[CatalogItem, float]]:
+        """
+        Add a keyword-match bonus to each item's cosine similarity score, then
+        re-sort by the combined score.
+
+        Bonus scale (additive, stacks across matched skills):
+          +0.20  skill string found verbatim in item name
+          +0.08  skill string found verbatim in item description
+
+        Calibrated so a single exact name-match can reorder a 0.50 item above
+        a 0.65 item, but cannot override a genuinely strong 0.75+ cosine hit.
+        """
+        if not skills:
+            return scored
+
+        skill_terms = [s.lower() for s in skills]
+
+        boosted: list[tuple[CatalogItem, float]] = []
+        for item, base_score in scored:
+            bonus = 0.0
+            name_lower = item.name.lower()
+            desc_lower = item.description.lower()
+            for term in skill_terms:
+                if term in name_lower:
+                    bonus += _KW_BONUS_NAME
+                elif term in desc_lower:
+                    bonus += _KW_BONUS_DESC
+            boosted.append((item, base_score + bonus))
+
+        boosted.sort(key=lambda pair: pair[1], reverse=True)
+        return boosted
 
     # ------------------------------------------------------------------
     # Helpers

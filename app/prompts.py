@@ -69,6 +69,27 @@ named_removals: Product names the user explicitly asked to remove IN THE LATEST
                 TURN ONLY. Do not carry over from earlier turns.
 compare_targets: Exactly two product names when turn_type is compare_request.
                  Empty list for all other turn types.
+
+                 RESOLUTION RULES — apply in this order before writing the array:
+
+                 1. Check the standing shortlist first.
+                    If the user uses a shorthand ("OPQ", "DSI", "Verify") that
+                    could match a name in current_shortlist, resolve it to the
+                    exact full name from the shortlist.
+                    Example: user says "Compare OPQ and Verify" and the shortlist
+                    contains "Occupational Personality Questionnaire OPQ32r" and
+                    "Verify - Numerical Reasoning" → output those full names.
+
+                 2. If the shorthand does not match anything in the shortlist,
+                    output the user's term as-is.  The agent's fuzzy_lookup will
+                    resolve it against the full catalog at runtime.
+
+                 3. Never infer or hallucinate a third product.  If the user only
+                    names one item, set compare_targets to [] and classify the
+                    turn as new_info or refine_add instead.
+
+                 4. The two names must be distinct.  If the user seems to compare
+                    a product with itself, treat it as a clarify or off_topic turn.
 explicit_adds : Product names the user explicitly asked to add IN THE LATEST TURN.
 current_shortlist: Re-derive from the most recent assistant turn that contained a
                    product list or table. Extract product names exactly as shown.
@@ -93,6 +114,29 @@ has_enough_context: MANDATORY — follow this rule exactly, no exceptions:
 When has_enough_context is false, identify the FIRST missing dimension
 in this exact priority order: role → seniority → purpose.
 Never ask two questions at once.
+
+─── CONFLICT RESOLUTION ──────────────────────────────────────────────────────
+When the user states a value in turn N and then changes it in turn M (M > N),
+the later statement permanently overwrites the earlier one.  Do not merge, blend,
+or average conflicting constraints — use only the most recent explicit value.
+
+Field-by-field rules:
+  seniority       : The latest explicit level wins.  "Graduate" in T2 replaced
+                    by "Manager" in T4 → seniority = "Manager", not both.
+  purpose         : The latest explicit purpose wins.  "development" then
+                    "selection" → purpose = "selection".
+  locale          : The latest explicit locale wins.
+  skills          : Additive across turns UNLESS the user says "instead of" or
+                    "not X" or "drop X" — then treat as a removal, not an edit.
+                    "Add Python" after "Add Java" → skills = ["Java", "Python"].
+                    "Actually Python instead of Java" → skills = ["Python"].
+  role_context    : Summarise the most recent coherent role description.
+                    If the user corrects the role outright, use the correction.
+  named_removals  : Latest-turn only — never carry forward from earlier turns.
+  explicit_adds   : Latest-turn only — never carry forward from earlier turns.
+
+Use the `reasoning` scratchpad to write out the edit ledger before committing
+to any field, so conflicts are resolved explicitly rather than accidentally.
 
 ─── HARD RULES ───────────────────────────────────────────────────────────────
 • Output ONLY the JSON object. No explanation, no markdown, no preamble.
@@ -252,6 +296,6 @@ Ask a single clarifying question."""
 # ---------------------------------------------------------------------------
 
 REFUSAL_TEMPLATE = (
-    "That's outside what I can advise on — {topic} questions should go to your "
-    "legal or compliance team. I'm happy to continue with the assessment shortlist."
+    "That's outside what I can advise on. I am an AI assistant specifically designed to help "
+    "with SHL assessment recommendations. I'm happy to continue with the assessment shortlist."
 )

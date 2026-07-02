@@ -73,6 +73,7 @@ class Recommendation(BaseModel):
     keys: list[str]     # human-readable category labels, e.g. ["Knowledge & Skills"]
     duration: str       # display string, e.g. "25 minutes" | "Untimed" | ""
     languages: list[str]  # e.g. ["English (USA)", "French"]
+    score: Optional[float] = None  # cosine similarity (0-1); None for shortlist rebuilds
 
 
 class ChatResponse(BaseModel):
