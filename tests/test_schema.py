@@ -28,7 +28,14 @@ from app.data_loader import CatalogStore, semantic_search_with_scores
 from app.models import CatalogItem, ChatResponse, Message, Recommendation, TurnClassification
 
 
-CATALOG_PATH = Path(__file__).parent.parent / "shl_product_catalog.json"
+_ROOT = Path(__file__).parent.parent
+CATALOG_PATH = next(
+    p for p in [
+        _ROOT / "shl_product_catalog.json",
+        _ROOT / "others" / "shl_product_catalog.json",
+    ]
+    if p.exists()
+)
 
 
 @pytest.fixture(scope="module")
@@ -49,7 +56,7 @@ def test_valid_response_with_empty_recommendations():
 
 def test_valid_response_with_recommendations(valid_urls):
     url = next(iter(valid_urls))
-    rec = Recommendation(name="Test", url=url, test_type="K")
+    rec = Recommendation(name="Test", url=url, test_type="K", keys=[], duration="", languages=[])
     resp = ChatResponse(reply="Here you go", recommendations=[rec], end_of_conversation=False)
     assert len(resp.recommendations) == 1
     assert resp.recommendations[0].test_type == "K"
@@ -89,7 +96,7 @@ def test_integer_bool_rejected():
 def test_recommendation_urls_in_catalog(valid_urls):
     """Any URL appearing in recommendations must be a known catalog URL."""
     url = next(iter(valid_urls))
-    rec = Recommendation(name="OPQ32r", url=url, test_type="P")
+    rec = Recommendation(name="OPQ32r", url=url, test_type="P", keys=[], duration="", languages=[])
     resp = ChatResponse(reply="test", recommendations=[rec], end_of_conversation=False)
     for r in resp.recommendations:
         assert r.url in valid_urls, f"URL not in catalog: {r.url}"
@@ -113,6 +120,9 @@ def test_model_dump_round_trip():
                 name="Graduate Scenarios",
                 url="https://www.shl.com/products/product-catalog/view/graduate-scenarios/",
                 test_type="B",
+                keys=["Biodata & Situational Judgment"],
+                duration="25 minutes",
+                languages=["English (USA)"],
             )
         ],
         end_of_conversation=False,
@@ -293,6 +303,6 @@ def test_attach_shortlist_footer():
     service = RawAgentService(store, openai_client=object())
     footer = service._attach_shortlist_footer(
         "Here is the update.",
-        [Recommendation(name="Alpha", url="https://example.com/a", test_type="P")],
+        [Recommendation(name="Alpha", url="https://example.com/a", test_type="P", keys=[], duration="", languages=[])],
     )
     assert footer.endswith("Current shortlist: Alpha.")

@@ -68,8 +68,11 @@ class ChatRequest(BaseModel):
 
 class Recommendation(BaseModel):
     name: str
-    url: str       # must be a link that exists in the catalog
-    test_type: str
+    url: str            # must be a link that exists in the catalog
+    test_type: str      # comma-joined single-letter codes, e.g. "A,K" or "P"
+    keys: list[str]     # human-readable category labels, e.g. ["Knowledge & Skills"]
+    duration: str       # display string, e.g. "25 minutes" | "Untimed" | ""
+    languages: list[str]  # e.g. ["English (USA)", "French"]
 
 
 class ChatResponse(BaseModel):

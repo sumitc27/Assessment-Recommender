@@ -23,7 +23,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 TRACES_DIR = Path(__file__).parent.parent / "GenAI_SampleConversations"
-CATALOG_PATH = Path(__file__).parent.parent / "shl_product_catalog.json"
+_ROOT = Path(__file__).parent.parent
+CATALOG_PATH = next(
+    p for p in [
+        _ROOT / "shl_product_catalog.json",
+        _ROOT / "others" / "shl_product_catalog.json",
+    ]
+    if p.exists()
+)
 BASE_URL = os.getenv("TEST_SERVER_URL", "http://localhost:8000")
 RECALL_THRESHOLD = 0.6   # at least 60% of expected items must appear
 

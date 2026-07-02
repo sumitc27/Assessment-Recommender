@@ -53,21 +53,25 @@ explicit_adds : Product names the user explicitly asked to add IN THE LATEST TUR
 current_shortlist: Re-derive from the most recent assistant turn that contained a
                    product list or table. Extract product names exactly as shown.
                    Empty list if no recommendations have been made yet.
-has_enough_context: true ONLY when ALL of the following hold:
-                   (a) role_context is non-empty — the job role is clearly known.
-                   (b) seniority is non-empty OR purpose is non-empty.
-                       Seniority is CRITICAL — SHL has products specifically
-                       targeted at Entry-Level vs Mid-Professional vs Executive.
-                       Without seniority the agent cannot pick the right level.
-                       A technology skill name (e.g. "Java", "Python") does NOT
-                       satisfy condition (b) on its own.
-                   false in every other case, including when:
-                   • role is still unknown
-                   • role is known but seniority AND purpose are both missing
-                   • the query is so vague any recommendation would be a guess
+has_enough_context: MANDATORY — follow this rule exactly, no exceptions:
 
-When has_enough_context is false, ask about ONE missing dimension in this
-priority order: role → seniority → purpose → locale.
+  Set TRUE only when ALL THREE of the following are non-empty:
+    (a) role_context — the job role or function is clearly stated
+    (b) seniority   — the level is clearly stated (Entry-Level, Graduate,
+                      Mid-Professional, Manager, Director, Executive, etc.)
+    (c) purpose     — "selection", "development", or "screening"
+
+  Set FALSE when ANY one of the three is missing or genuinely ambiguous.
+
+  Hard limits you must respect:
+    • Do NOT set FALSE to ask about locale, industry, team size, or company
+      details — those are optional and never gate a recommendation.
+    • A technology skill ("Java", "Python") does NOT satisfy (b) or (c).
+    • The agent enforces a 2-question soft budget: after 2 clarifying turns
+      it recommends regardless, so do not chain indefinitely.
+
+When has_enough_context is false, identify the FIRST missing dimension
+in this exact priority order: role → seniority → purpose.
 Never ask two questions at once.
 
 ─── HARD RULES ───────────────────────────────────────────────────────────────

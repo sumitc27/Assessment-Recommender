@@ -241,7 +241,11 @@ def semantic_search_with_scores(
 if __name__ == "__main__":
     from collections import Counter
 
-    catalog = load_catalog("shl_product_catalog.json")
+    _catalog_path = next(
+        p for p in ["shl_product_catalog.json", "others/shl_product_catalog.json"]
+        if __import__("os").path.exists(p)
+    )
+    catalog = load_catalog(_catalog_path)
     print(f"Loaded {len(catalog)} catalog items")
 
     key_counts: Counter[str] = Counter()
