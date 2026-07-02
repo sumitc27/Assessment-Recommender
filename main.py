@@ -28,10 +28,21 @@ def _make_agent(store, openai_client):
     return RawAgentService(store, openai_client)
 
 
+def _find_catalog() -> str:
+    """Locate the catalog JSON regardless of whether it sits at root or in others/."""
+    for candidate in ["shl_product_catalog.json", "others/shl_product_catalog.json"]:
+        if os.path.exists(candidate):
+            return candidate
+    raise FileNotFoundError(
+        "shl_product_catalog.json not found. "
+        "Place it at the project root or in the others/ directory."
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    catalog = load_catalog("shl_product_catalog.json")
+    catalog = load_catalog(_find_catalog())
     store = build_store(catalog, openai_client)
     app.state.agent = _make_agent(store, openai_client)
     yield

@@ -19,7 +19,13 @@ from pathlib import Path
 import httpx
 
 TRACES_DIR = Path("GenAI_SampleConversations")
-CATALOG_PATH = Path("shl_product_catalog.json")
+CATALOG_PATH = next(
+    p for p in [
+        Path("shl_product_catalog.json"),
+        Path("others/shl_product_catalog.json"),
+    ]
+    if p.exists()
+)
 
 
 # ---------------------------------------------------------------------------

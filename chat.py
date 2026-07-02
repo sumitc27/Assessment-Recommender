@@ -54,8 +54,13 @@ while True:
     if recs:
         print("\n  Recommendations:")
         for i, r in enumerate(recs, 1):
-            print(f"    {i}. {r['name']} [{r['test_type']}]")
-            print(f"       {r['url']}")
+            keys_str = ", ".join(r.get("keys", [])) or r.get("test_type", "")
+            duration = r.get("duration") or "—"
+            langs = ", ".join(r.get("languages", [])) or "—"
+            print(f"    {i}. {r['name']}")
+            print(f"       Type    : {r['test_type']}  |  Keys: {keys_str}")
+            print(f"       Duration: {duration}  |  Languages: {langs}")
+            print(f"       URL     : {r['url']}")
 
     if eoc:
         print("\n— conversation complete —")

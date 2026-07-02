@@ -79,7 +79,11 @@ _CLASSIFIER_JSON_SCHEMA = {
 }
 
 _OPQ32R_NAME = "Occupational Personality Questionnaire OPQ32r"
-_LOW_SIMILARITY_THRESHOLD = 0.28
+# Calibrated from calibrate_retrieval.py against 12 representative queries.
+# Scores below this indicate the top FAISS result is a weak stretch — the
+# composer will name the gap explicitly. Set at p25(top-1 scores) - 0.05 = 0.40.
+# Do NOT use this to filter out-of-scope queries — the classifier handles that.
+_LOW_SIMILARITY_THRESHOLD = 0.40
 
 
 class RawAgentService:
@@ -91,6 +95,9 @@ class RawAgentService:
     # Public entry point
     # ------------------------------------------------------------------
 
+    # Maximum clarifying questions before recommending anyway (8-turn cap)
+    _CLARIFY_BUDGET = 2
+
     def process_turn(self, messages: list[Message]) -> ChatResponse:
         classification = self._classify(messages)
         turn = classification.turn_type
@@ -101,7 +108,17 @@ class RawAgentService:
             return self._handle_confirm(classification)
         if turn == "compare_request":
             return self._handle_compare(classification, messages)
+
         if not classification.has_enough_context:
+            spent = self._clarification_turns_spent(messages, classification)
+            if spent >= self._CLARIFY_BUDGET:
+                # Soft budget hit — recommend with a caveat rather than asking again
+                missing = self._missing_dimension(classification)
+                caveat = (
+                    f"proceeding without confirmed {missing} — acknowledge the "
+                    f"uncertainty briefly and invite the user to refine afterwards"
+                )
+                return self._handle_recommend(classification, caveat=caveat)
             return self._handle_clarify(classification)
 
         if turn in {"new_info", "refine_add", "refine_remove", "refine_disambiguate"}:
@@ -238,8 +255,14 @@ class RawAgentService:
             end_of_conversation=False,
         )
 
-    def _handle_recommend(self, c: TurnClassification) -> ChatResponse:
+    def _handle_recommend(
+        self, c: TurnClassification, caveat: str = ""
+    ) -> ChatResponse:
         candidates, defaults_added, catalog_gaps = self._retrieve(c)
+
+        # Surface the soft-budget caveat through the existing catalog_gaps channel
+        if caveat:
+            catalog_gaps = [caveat] + catalog_gaps
 
         shortlist_text = "\n".join(
             f"  {i+1}. {item.name} [{item.test_type}] — {item.description[:100]}..."
@@ -268,7 +291,14 @@ class RawAgentService:
         reply = response.choices[0].message.content.strip()
 
         recommendations = [
-            Recommendation(name=item.name, url=item.url, test_type=item.test_type)
+            Recommendation(
+                name=item.name,
+                url=item.url,
+                test_type=item.test_type,
+                keys=item.keys_raw,
+                duration=item.duration_display,
+                languages=item.languages,
+            )
             for item in candidates
         ]
         self._assert_no_hallucinated_urls(recommendations)
@@ -503,13 +533,38 @@ class RawAgentService:
     # Helpers
     # ------------------------------------------------------------------
 
+    def _clarification_turns_spent(
+        self, messages: list[Message], c: TurnClassification
+    ) -> int:
+        """
+        Count how many clarification turns have already been spent in this
+        conversation.
+
+        A clarification turn is an assistant turn that happened before any
+        shortlist was produced.  We detect this by checking whether the
+        classifier found an existing shortlist: if current_shortlist is still
+        empty, every prior assistant message was a clarifying question.
+        """
+        if c.current_shortlist:
+            # Recommendations have already been made — we are in refinement,
+            # not clarification.  Reset the counter.
+            return 0
+        return sum(1 for m in messages if m.role == "assistant")
+
     def _rebuild_shortlist(self, names: list[str]) -> list[Recommendation]:
         result = []
         for name in names:
             item = fuzzy_lookup(self._store, name, threshold=70)
             if item:
                 result.append(
-                    Recommendation(name=item.name, url=item.url, test_type=item.test_type)
+                    Recommendation(
+                        name=item.name,
+                        url=item.url,
+                        test_type=item.test_type,
+                        keys=item.keys_raw,
+                        duration=item.duration_display,
+                        languages=item.languages,
+                    )
                 )
             else:
                 logger.warning("Could not resolve shortlist item: %s", name)
@@ -517,12 +572,16 @@ class RawAgentService:
 
     def _missing_dimension(self, c: TurnClassification) -> str:
         if not c.role_context:
-            return "role"
+            return "role or job function"
+        if not c.seniority and not c.purpose:
+            return "seniority level"
         if not c.seniority:
             return "seniority level"
         if not c.purpose:
-            return "purpose (selection, development, or screening)"
-        return "additional context"
+            return "assessment purpose (selection, development, or screening)"
+        # has_enough_context should be True before we reach here;
+        # fall back to seniority rather than inventing untracked questions.
+        return "seniority level"
 
     def _assert_no_hallucinated_urls(self, recs: list[Recommendation]) -> None:
         for rec in recs:

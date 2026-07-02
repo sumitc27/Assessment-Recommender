@@ -203,7 +203,7 @@ class LangchainAgentService:
 
             catalog_gaps: list[str] = []
             top_score = docs_and_scores[0][1] if docs_and_scores else None
-            if top_score is not None and top_score < 0.28:
+            if top_score is not None and top_score < 0.40:  # same as _LOW_SIMILARITY_THRESHOLD
                 substitute = candidates[0].name if candidates else None
                 signal = c.skills[0] if c.skills else (c.role_context or "this request")
                 gap_note = f'no strong match for "{signal}" in the catalog'
@@ -247,7 +247,14 @@ class LangchainAgentService:
         })
 
         recommendations = [
-            Recommendation(name=item.name, url=item.url, test_type=item.test_type)
+            Recommendation(
+                name=item.name,
+                url=item.url,
+                test_type=item.test_type,
+                keys=item.keys_raw,
+                duration=item.duration_display,
+                languages=item.languages,
+            )
             for item in candidates
         ]
         self._raw._assert_no_hallucinated_urls(recommendations)
