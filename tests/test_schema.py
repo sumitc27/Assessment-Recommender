@@ -221,8 +221,10 @@ def test_low_similarity_branch_flags_catalog_gap(monkeypatch):
         has_enough_context=True,
     )
 
-    candidates, defaults_added, catalog_gaps = service._retrieve(classification)
-    assert candidates[0].name == "Alpha"
+    candidates, defaults_added, catalog_gaps, score_map = service._retrieve(classification)
+    # All fake scores (0.25, 0.24) are below the quality threshold (0.45), so
+    # the quality filter removes them — candidates is intentionally empty here.
+    # The important assertion is that the gap signal still fires.
     assert defaults_added == []
     assert any("no strong match" in gap for gap in catalog_gaps)
 

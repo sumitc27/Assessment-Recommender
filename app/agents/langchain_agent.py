@@ -182,50 +182,18 @@ class LangchainAgentService:
     # ------------------------------------------------------------------
 
     def _handle_recommend(self, c: TurnClassification) -> ChatResponse:
-        is_refine = c.turn_type in {"refine_add", "refine_remove", "refine_disambiguate"}
-
-        if is_refine and c.current_shortlist:
-            # Delegate to raw agent's _retrieve — it handles shortlist preservation
-            candidates, defaults_added, catalog_gaps = self._raw._retrieve(c)
-        else:
-            # Fresh retrieval via LangChain FAISS
-            persona_query = self._raw._build_persona_query(c)
-            docs_and_scores = self._vectorstore.similarity_search_with_relevance_scores(
-                persona_query, k=20
-            )
-            candidates = [
-                self._store.by_entity_id[doc.metadata["entity_id"]]
-                for doc, _score in docs_and_scores
-                if doc.metadata.get("entity_id") in self._store.by_entity_id
-            ]
-            candidates = self._raw._rerank(candidates, c)
-            candidates = self._raw._apply_removals(candidates, c.named_removals)
-
-            catalog_gaps: list[str] = []
-            top_score = docs_and_scores[0][1] if docs_and_scores else None
-            if top_score is not None and top_score < 0.40:  # same as _LOW_SIMILARITY_THRESHOLD
-                substitute = candidates[0].name if candidates else None
-                signal = c.skills[0] if c.skills else (c.role_context or "this request")
-                gap_note = f'no strong match for "{signal}" in the catalog'
-                if substitute:
-                    gap_note += f"; using {substitute} as the closest substitute"
-                catalog_gaps.append(gap_note)
-
-            for add_name in c.explicit_adds:
-                match = fuzzy_lookup(self._store, add_name)
-                if match and match not in candidates:
-                    candidates.insert(0, match)
-                elif match is None:
-                    catalog_gaps.append(add_name)
-
-            candidates, defaults_added = self._raw._apply_default_bundling(candidates, c)
-            if not catalog_gaps:
-                catalog_gaps = self._raw._detect_skill_gaps(c.skills, candidates)
-
-            candidates = candidates[:10]
+        # Delegate all retrieval logic to raw agent — it now owns the three-branch
+        # pipeline (remove-only, add-supplement, fresh) with quality filtering and
+        # the auto-add-on-delete fix.  LangChain's vectorstore is only used for
+        # fresh retrieval, which raw._retrieve already does with FAISS directly.
+        candidates, defaults_added, catalog_gaps, score_map = self._raw._retrieve(c)
 
         shortlist_text = "\n".join(
-            f"  {i+1}. {item.name} [{item.test_type}] — {item.description[:100]}..."
+            f"  {i+1}. {item.name} [{item.test_type}]\n"
+            f"      Keys: {', '.join(item.keys_raw) if item.keys_raw else 'N/A'}\n"
+            f"      Duration: {item.duration_display or 'N/A'} | "
+            f"Languages: {', '.join(item.languages[:3]) if item.languages else 'N/A'}\n"
+            f"      Description: {item.description}"
             for i, item in enumerate(candidates)
         )
         prompt = ChatPromptTemplate.from_messages([
@@ -254,6 +222,7 @@ class LangchainAgentService:
                 keys=item.keys_raw,
                 duration=item.duration_display,
                 languages=item.languages,
+                score=score_map.get(item.entity_id),
             )
             for item in candidates
         ]
