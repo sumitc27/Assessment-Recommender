@@ -207,6 +207,7 @@ def test_low_similarity_branch_flags_catalog_gap(monkeypatch):
     monkeypatch.setattr(service, "_embed", lambda _text: np.zeros(16, dtype=np.float32))
 
     classification = TurnClassification(
+        reasoning="Turn 1 [USER]: role=Rust developer, purpose=selection. No seniority stated.",
         turn_type="new_info",
         role_context="Rust developer",
         seniority="",
@@ -230,6 +231,7 @@ def test_handle_confirm_rebuilds_shortlist():
     store = _build_score_test_store()
     service = RawAgentService(store, openai_client=object())
     classification = TurnClassification(
+        reasoning="User confirmed the shortlist is final.",
         turn_type="closing_confirm",
         role_context="",
         seniority="",
@@ -275,6 +277,7 @@ def test_handle_compare_uses_catalog_items_and_preserves_shortlist():
     store = _build_score_test_store()
     service = RawAgentService(store, openai_client=_StubClient())
     classification = TurnClassification(
+        reasoning="User asked to compare Alpha vs Beta. Both names appear in the shortlist.",
         turn_type="compare_request",
         role_context="",
         seniority="",

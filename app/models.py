@@ -96,7 +96,16 @@ class TurnClassification(BaseModel):
     The classifier reads the full message history and re-derives all cumulative
     state from scratch — it never relies on a previous classification or any
     server-side session store.
+
+    `reasoning` is a chain-of-thought scratchpad that the model fills in FIRST,
+    before it commits to any extracted field.  It is never forwarded to the user
+    or logged at INFO level; it exists solely so gpt-4o-mini builds an explicit
+    ledger of edits before finalising skills / named_removals / current_shortlist.
     """
+
+    # Chain-of-thought scratchpad — MUST be the first field so the model writes
+    # it before answering any other field (OpenAI preserves property order).
+    reasoning: str
 
     turn_type: Literal[
         "new_info",
