@@ -97,11 +97,24 @@ _KW_BONUS_NAME = 0.20   # skill string appears verbatim in the item name
 _KW_BONUS_DESC = 0.08   # skill string appears verbatim in the item description
 _KW_INJECT_BASE = 0.38  # base score for keyword-only injections (above gap threshold)
 
-# Calibrated from calibrate_retrieval.py against 12 representative queries.
-# Scores below this indicate the top FAISS result is a weak stretch — the
-# composer will name the gap explicitly. Set at p25(top-1 scores) - 0.05 = 0.40.
-# Do NOT use this to filter out-of-scope queries — the classifier handles that.
-_LOW_SIMILARITY_THRESHOLD = 0.40
+# Hard relevance gate: any candidate whose combined (cosine + keyword boost) score
+# sits below this value is discarded before the composer ever sees it.  0.50 is
+# the empirical midpoint between "clearly relevant" (≥0.55) and "coincidental
+# keyword overlap" (≤0.45) observed across dev/tech/ops queries in the catalog.
+# Raised from 0.40 → 0.50 to prevent Physics / Sales / Retail tests from leaking
+# into software-role shortlists where cosine similarity is weakly positive but
+# the content is genuinely irrelevant.
+# Do NOT use this to block out-of-scope queries — the classifier handles that.
+_LOW_SIMILARITY_THRESHOLD = 0.50
+
+# Role keywords that identify software / technical profiles — used in default-
+# bundling to prevent Sales/Retail personality measures from being added.
+_TECH_ROLE_KEYWORDS = (
+    "engineer", "developer", "programmer", "software", "backend", "frontend",
+    "full stack", "full-stack", "devops", "sre", "data scientist", "data engineer",
+    "machine learning", "ml engineer", "cloud", "platform", "infrastructure",
+    "architect", "qa ", "quality assurance", "security engineer", "analyst",
+)
 
 
 class RawAgentService:
@@ -279,6 +292,7 @@ class RawAgentService:
         self, c: TurnClassification, caveat: str = ""
     ) -> ChatResponse:
         candidates, defaults_added, catalog_gaps, score_map = self._retrieve(c)
+        candidates = candidates[:5]
 
         # Surface the soft-budget caveat through the existing catalog_gaps channel
         if caveat:
@@ -376,7 +390,7 @@ class RawAgentService:
 
             # For refine_add: supplement with fresh FAISS results to fill gaps.
             # Fetch k=20 so there are enough candidates after quality filtering.
-            if c.turn_type == "refine_add" and len(candidates) < 10:
+            if c.turn_type == "refine_add" and len(candidates) < 5:
                 query_vec = self._embed(self._build_persona_query(c))
                 scored = semantic_search_with_scores(self._store, query_vec, k=20)
                 scored = self._inject_keyword_matches(scored, c.skills)
@@ -385,7 +399,7 @@ class RawAgentService:
                     if item not in candidates and score >= _LOW_SIMILARITY_THRESHOLD:
                         candidates.append(item)
                         score_map[item.entity_id] = round(score, 4)
-                    if len(candidates) >= 10:
+                    if len(candidates) >= 5:
                         break
 
         else:
@@ -406,13 +420,13 @@ class RawAgentService:
             # Hybrid step 2: boost and re-sort by combined score.
             scored_candidates = self._apply_keyword_boost(scored_candidates, c.skills)
 
-            # Dynamic quality filter: keep items at or above the threshold.
-            # Guarantee at least 3 results even for niche queries so the agent
-            # never returns an empty shortlist when the catalog has any match.
-            above = [(item, s) for item, s in scored_candidates if s >= _LOW_SIMILARITY_THRESHOLD]
-            if len(above) < 3:
-                above = scored_candidates[:3]   # top-3 fallback, no padding below that
-            scored_candidates = above
+            # Strict quality gate: never allow low-similarity leakage into the
+            # candidate pool.
+            scored_candidates = [
+                (item, s)
+                for item, s in scored_candidates
+                if s >= _LOW_SIMILARITY_THRESHOLD
+            ]
 
             # Build score map before reranking changes order
             for item, s in scored_candidates:
@@ -442,7 +456,7 @@ class RawAgentService:
         if not catalog_gaps:
             catalog_gaps = self._detect_skill_gaps(c.skills, candidates)
 
-        return candidates[:10], defaults_added, catalog_gaps, score_map
+        return candidates[:5], defaults_added, catalog_gaps, score_map
 
     def _build_persona_query(self, c: TurnClassification) -> str:
         parts = []
@@ -519,7 +533,8 @@ class RawAgentService:
             for term in skill_terms:
                 if term in text:
                     score += 1
-            ordered.append((score, item))
+            if score > 0:
+                ordered.append((score, item))
         ordered.sort(key=lambda pair: pair[0], reverse=True)
         return [item for _score, item in ordered]
 
@@ -560,6 +575,18 @@ class RawAgentService:
             return candidates, []
 
         role = c.role_context.lower()
+        is_technical_role = any(keyword in role for keyword in _TECH_ROLE_KEYWORDS)
+
+        if is_technical_role:
+            exact_opq = next(
+                (item for item in self._store.items if item.name == _OPQ32R_NAME),
+                None,
+            )
+            if exact_opq and exact_opq not in candidates:
+                candidates.append(exact_opq)
+                return candidates, [exact_opq.name]
+            return candidates, []
+
         if any(kw in role for kw in ("safety", "industrial", "plant", "operator")):
             targets = [
                 "Dependability and Safety Instrument (DSI)",
@@ -573,7 +600,7 @@ class RawAgentService:
             targets = [_OPQ32R_NAME]
 
         for target in targets:
-            match = fuzzy_lookup(self._store, target, threshold=70)
+            match = fuzzy_lookup(self._store, target, threshold=85)
             if match and match not in candidates:
                 candidates.append(match)
                 return candidates, [match.name]
