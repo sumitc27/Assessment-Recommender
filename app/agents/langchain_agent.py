@@ -187,6 +187,7 @@ class LangchainAgentService:
         # the auto-add-on-delete fix.  LangChain's vectorstore is only used for
         # fresh retrieval, which raw._retrieve already does with FAISS directly.
         candidates, defaults_added, catalog_gaps, score_map = self._raw._retrieve(c)
+        candidates = candidates[:5]
 
         shortlist_text = "\n".join(
             f"  {i+1}. {item.name} [{item.test_type}]\n"
